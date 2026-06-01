@@ -2,6 +2,69 @@ import cv2
 import numpy as np
 from itertools import combinations
 
+def calculate_line_length_in_image(rho, theta, img_width, img_height):
+    """
+    Oblicza długość odcinka linii (rho, theta) przecinającego obraz
+    
+    Args:
+        rho, theta: parametry linii z transformaty Hougha
+        img_width, img_height: wymiary obrazu
+    
+    Returns:
+        length: długość odcinka w pikselach
+    """
+    # Parametry linii: x*cos(theta) + y*sin(theta) = rho
+    cos_t = np.cos(theta)
+    sin_t = np.sin(theta)
+    
+    # Znajdź przecięcia z krawędziami obrazu
+    intersections = []
+    
+    # Lewa krawędź (x = 0)
+    if abs(sin_t) > 1e-6:
+        y = rho / sin_t
+        if 0 <= y <= img_height:
+            intersections.append((0, y))
+    
+    # Prawa krawędź (x = img_width)
+    if abs(sin_t) > 1e-6:
+        y = (rho - img_width * cos_t) / sin_t
+        if 0 <= y <= img_height:
+            intersections.append((img_width, y))
+    
+    # Górna krawędź (y = 0)
+    if abs(cos_t) > 1e-6:
+        x = rho / cos_t
+        if 0 <= x <= img_width:
+            intersections.append((x, 0))
+    
+    # Dolna krawędź (y = img_height)
+    if abs(cos_t) > 1e-6:
+        x = (rho - img_height * sin_t) / cos_t
+        if 0 <= x <= img_width:
+            intersections.append((x, img_height))
+    
+    # Usuń duplikaty (punkty bardzo blisko siebie)
+    unique_intersections = []
+    for point in intersections:
+        is_duplicate = False
+        for existing in unique_intersections:
+            if abs(point[0] - existing[0]) < 1 and abs(point[1] - existing[1]) < 1:
+                is_duplicate = True
+                break
+        if not is_duplicate:
+            unique_intersections.append(point)
+    
+    # Jeśli mamy 2 punkty, oblicz odległość
+    if len(unique_intersections) >= 2:
+        p1 = np.array(unique_intersections[0])
+        p2 = np.array(unique_intersections[1])
+        length = np.linalg.norm(p2 - p1)
+        return length
+    
+    return 0
+
+
 def detect_film_frame_hough(img, show_steps=True):
     """
     Wykrywa prostokąt klatki filmowej używając transformaty Hougha
@@ -25,36 +88,23 @@ def detect_film_frame_hough(img, show_steps=True):
         gray = img.copy()
     
 
-
-    norm = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX)
-
-    left_side_strip = norm[:, :int(gray.shape[1] * 0.1)]  # Lewy pasek (10% szerokości)
-
-    base_mask_value = np.median(left_side_strip)
-
-    treasholded = cv2.threshold(gray, base_mask_value , 255, cv2.THRESH_BINARY)
-    cv2.window('Thresholded', cv2.WINDOW_NORMAL)
-    cv2.imshow('Thresholded', cv2.resize(treasholded[1], (800, 600)))
-    
-
     # Redukcja szumu
-    blurred = cv2.GaussianBlur(treasholded[1], (3, 3), 0)
-    sharpend = blurred - cv2.Laplacian(blurred, cv2.CV_64F)
-    sharpened = cv2.convertScaleAbs(sharpend)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    
     
     # Wykrywanie krawędzi - ale tylko do pomocy dla Hougha
-    edges = cv2.Canny(blurred, 70, 130, apertureSize=3)
-    edges[:, :int(gray.shape[1] * 0.05)] = 0  # Wyłącz krawędzie w lewym pasku
-    edges[:, int(gray.shape[1] * 0.95):] = 0  # Wyłącz krawędzie w prawym pasku
-    edges[:int(gray.shape[0] * 0.05), :] = 0  # Wyłącz krawędzie w górnym pasku
-    edges[int(gray.shape[0] * 0.95):, :] = 0
+    edges = cv2.Canny(blurred, 60, 150, apertureSize=3)
+    edges[:, :int(blurred.shape[1] * 0.05)] = 0  # Wyłącz krawędzie w lewym pasku
+    edges[:, int(blurred.shape[1] * 0.95):] = 0  # Wyłącz krawędzie w prawym pasku
+    edges[:int(blurred.shape[0] * 0.05), :] = 0  # Wyłącz krawędzie w górnym pasku
+    edges[int(blurred.shape[0] * 0.95):, :] = 0
     
 
     # Transformata Hougha do wykrywania linii
     # rho: rozdzielczość w pikselach (1 piksel)
     # theta: rozdzielczość kąta (1 stopień = pi/180)
     # threshold: minimalna liczba punktów przecięcia
-    lines = cv2.HoughLines(edges, rho=2, theta=np.pi/180, threshold=200)
+    lines = cv2.HoughLines(edges, rho=1, theta=np.pi/180, threshold=100)
     
     if lines is None:
         print("✗ Nie wykryto żadnych linii")
@@ -63,16 +113,27 @@ def detect_film_frame_hough(img, show_steps=True):
     # Filtruj linie - szukamy linii poziomych i pionowych
     horizontal_lines = []
     vertical_lines = []
+    delta = np.pi / 180 * 3  # Tolerancja 3 stopnie
     
+    img_height, img_width = img.shape[:2]
+    min_length_ratio = 0.4  # Minimalna długość linii (60% rozmiaru obrazu)
+
     for line in lines:
         rho, theta = line[0]
         
+        # Oblicz długość linii w obrazie
+        line_length = calculate_line_length_in_image(rho, theta, img_width, img_height)
+        
         # Linie poziome: theta ≈ 0° lub ≈ 180°
-        if theta < np.pi/4 or theta > 3*np.pi/4:
-            horizontal_lines.append((rho, theta))
+        if theta < np.pi/4+delta or theta > 3*np.pi/4+delta:
+            # Sprawdź czy linia jest wystarczająco długa (min 60% szerokości)
+            if line_length >= min_length_ratio * img_width:
+                horizontal_lines.append((rho, theta))
         # Linie pionowe: theta ≈ 90°
         else:
-            vertical_lines.append((rho, theta))
+            # Sprawdź czy linia jest wystarczająco długa (min 60% wysokości)
+            if line_length >= min_length_ratio * img_height:
+                vertical_lines.append((rho, theta))
     
     print(f"Znaleziono {len(horizontal_lines)} linii poziomych i {len(vertical_lines)} linii pionowych")
     
@@ -193,6 +254,7 @@ def find_rectangle_from_lines(horizontal_lines, vertical_lines, img_shape):
     
     # Spróbuj różnych kombinacji
     for h_pair in combinations(range(len(horizontal_lines)), 2):
+        #print(f"pozostało {len(horizontal_lines) - h_pair[1]} poziomych i {len(vertical_lines)} pionowych")
         for v_pair in combinations(range(len(vertical_lines)), 2):
             h1, h2 = horizontal_lines[h_pair[0]], horizontal_lines[h_pair[1]]
             v1, v2 = vertical_lines[v_pair[0]], vertical_lines[v_pair[1]]
