@@ -45,7 +45,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
+import com.example.mofilm.data.FilmProcess
+import com.example.mofilm.ui.viewmodels.FilmProcessViewModel
 import org.opencv.android.Utils
 import org.opencv.core.*
 import org.opencv.imgproc.Imgproc
@@ -60,7 +64,7 @@ import org.opencv.core.Point as CvPoint
 enum class ProcessingMode { EDIT, CROP }
 
 @Composable
-fun ScannerScreen() {
+fun ScannerScreen(viewModel: FilmProcessViewModel = viewModel()) {
     val context = LocalContext.current
     var isProcessing by remember { mutableStateOf(false) }
     var capturedImageUri by remember { mutableStateOf<Uri?>(null) }
@@ -75,6 +79,7 @@ fun ScannerScreen() {
     if (isProcessing && capturedImageUri != null) {
         ProcessingView(
             imageUri = capturedImageUri!!,
+            viewModel = viewModel,
             onBack = { 
                 isProcessing = false
                 refreshLists()
@@ -278,7 +283,7 @@ fun ScannerMenuView(
 }
 
 @Composable
-fun ProcessingView(imageUri: Uri, onBack: () -> Unit) {
+fun ProcessingView(imageUri: Uri, viewModel: FilmProcessViewModel, onBack: () -> Unit) {
     val context = LocalContext.current
     var currentMode by remember { mutableStateOf(ProcessingMode.EDIT) }
     var isNegative by remember { mutableStateOf(false) }
@@ -286,6 +291,9 @@ fun ProcessingView(imageUri: Uri, onBack: () -> Unit) {
     var corners by remember { mutableStateOf<List<Offset>>(emptyList()) }
     var containerSize by remember { mutableStateOf(IntSize.Zero) }
     var showDeleteDialog by remember { mutableStateOf(false) }
+    var selectedProcessId by remember { mutableStateOf<Int?>(null) }
+
+    val processes by viewModel.allProcesses.collectAsStateWithLifecycle()
 
     var processedBitmap by remember { mutableStateOf<Bitmap?>(null) }
 
@@ -391,14 +399,20 @@ fun ProcessingView(imageUri: Uri, onBack: () -> Unit) {
         if (currentMode == ProcessingMode.EDIT) {
             EditMenu(
                 isNegative = isNegative,
+                processes = processes,
+                selectedProcessId = selectedProcessId,
+                onProcessSelected = { selectedProcessId = it },
                 onNegativeChange = { checked ->
                     isNegative = checked
                     processedBitmap?.let { processedBitmap = applyNegativeOpenCV(it) }
                 },
                 onCropClick = { currentMode = ProcessingMode.CROP },
                 onSaveClick = {
-                    processedBitmap?.let {
-                        saveBitmapToGallery(context, it)
+                    processedBitmap?.let { bitmap ->
+                        val savedUri = saveBitmapToGallery(context, bitmap)
+                        if (savedUri != null && selectedProcessId != null) {
+                            viewModel.addScanToProcess(selectedProcessId!!, savedUri.toString())
+                        }
                         Toast.makeText(context, "Zapisano!", Toast.LENGTH_SHORT).show()
                         onBack()
                     }
@@ -445,12 +459,25 @@ fun ProcessingView(imageUri: Uri, onBack: () -> Unit) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun EditMenu(isNegative: Boolean, onNegativeChange: (Boolean) -> Unit, onCropClick: () -> Unit, onSaveClick: () -> Unit) {
+fun EditMenu(
+    isNegative: Boolean,
+    processes: List<FilmProcess>,
+    selectedProcessId: Int?,
+    onProcessSelected: (Int?) -> Unit,
+    onNegativeChange: (Boolean) -> Unit,
+    onCropClick: () -> Unit,
+    onSaveClick: () -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val selectedProcess = processes.find { it.id == selectedProcessId }
+
     Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         OutlinedButton(onClick = onCropClick, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) {
             Icon(Icons.Default.Crop, null); Spacer(Modifier.width(8.dp)); Text("Kadrowanie")
         }
+        
         Surface(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)) {
             Row(modifier = Modifier.padding(16.dp, 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -459,9 +486,37 @@ fun EditMenu(isNegative: Boolean, onNegativeChange: (Boolean) -> Unit, onCropCli
                 Switch(checked = isNegative, onCheckedChange = onNegativeChange)
             }
         }
-        OutlinedButton(onClick = { /* TODO: Color Correction */ }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) {
-            Icon(Icons.Default.ColorLens, null); Spacer(Modifier.width(8.dp)); Text("Korekcja koloru")
+
+        // Film Process Selection
+        ExposedDropdownMenuBox(
+            expanded = expanded,
+            onExpandedChange = { expanded = !expanded }
+        ) {
+            OutlinedTextField(
+                value = selectedProcess?.let { "${it.filmType} (${it.developer})" } ?: "Wybierz wołanie...",
+                onValueChange = {},
+                readOnly = true,
+                label = { Text("Podepnij pod wołanie") },
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                modifier = Modifier.menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable, true).fillMaxWidth(),
+                colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors()
+            )
+            ExposedDropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false }
+            ) {
+                processes.forEach { process ->
+                    DropdownMenuItem(
+                        text = { Text("${process.filmType} (${process.developer})") },
+                        onClick = {
+                            onProcessSelected(process.id)
+                            expanded = false
+                        }
+                    )
+                }
+            }
         }
+
         Button(onClick = onSaveClick, modifier = Modifier.fillMaxWidth().height(56.dp), shape = RoundedCornerShape(12.dp)) {
             Text("Zastosuj i zapisz", fontSize = 16.sp)
         }
@@ -499,7 +554,7 @@ fun CropMenu(
 private fun loadBitmapFromUri(context: Context, uri: Uri): Bitmap? =
     try { context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) } } catch (e: Exception) { null }
 
-private fun saveBitmapToGallery(context: Context, bitmap: Bitmap) {
+private fun saveBitmapToGallery(context: Context, bitmap: Bitmap): Uri? {
     val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
     val fileName = "MoFilm_Scan_$timeStamp.jpg"
     val values = ContentValues().apply {
@@ -507,9 +562,11 @@ private fun saveBitmapToGallery(context: Context, bitmap: Bitmap) {
         put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
         put(MediaStore.MediaColumns.RELATIVE_PATH, "Pictures/MoFilm/Scans")
     }
-    context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)?.let { uri ->
-        context.contentResolver.openOutputStream(uri)?.use { out -> bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out) }
+    val uri = context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+    uri?.let {
+        context.contentResolver.openOutputStream(it)?.use { out -> bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out) }
     }
+    return uri
 }
 
 private fun deleteImage(context: Context, uri: Uri) {

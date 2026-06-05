@@ -14,11 +14,13 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.mofilm.ui.screens.LibraryScreen
 import com.example.mofilm.ui.screens.MainMenuScreen
 import com.example.mofilm.ui.screens.ScannerScreen
 import com.example.mofilm.ui.screens.SettingsScreen
 import com.example.mofilm.ui.theme.MoFilmTheme
+import com.example.mofilm.ui.viewmodels.FilmProcessViewModel
 import org.opencv.android.OpenCVLoader
 import org.opencv.core.Core
 
@@ -53,6 +55,8 @@ enum class AppScreen(val title: String, val icon: Int) {
 @Composable
 fun MoFilmApp(isOpenCVLoaded: Boolean = false) {
     var currentScreen by rememberSaveable { mutableStateOf(AppScreen.MAIN_MENU) }
+    // Hoistujemy ViewModel, aby był współdzielony między zakładkami
+    val filmViewModel: FilmProcessViewModel = viewModel()
 
     Scaffold(
         topBar = {
@@ -108,9 +112,9 @@ fun MoFilmApp(isOpenCVLoaded: Boolean = false) {
                     onLibraryClick = { currentScreen = AppScreen.LIBRARY },
                     onSettingsClick = { currentScreen = AppScreen.SETTINGS }
                 )
-                AppScreen.SCANNER -> ScannerScreen()
-                AppScreen.LIBRARY -> LibraryScreen()
-                AppScreen.SETTINGS -> SettingsScreen()
+                AppScreen.SCANNER -> ScannerScreen(viewModel = filmViewModel)
+                AppScreen.LIBRARY -> LibraryScreen(viewModel = filmViewModel)
+                AppScreen.SETTINGS -> SettingsScreen(viewModel = filmViewModel)
             }
         }
     }
