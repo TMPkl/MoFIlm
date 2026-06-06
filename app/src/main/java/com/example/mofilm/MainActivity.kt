@@ -3,16 +3,22 @@ package com.example.mofilm
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.MenuBook
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.mofilm.ui.screens.LibraryScreen
@@ -44,19 +50,23 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-enum class AppScreen(val title: String, val icon: Int) {
-    MAIN_MENU("MoFilm", R.drawable.ic_home),
-    SCANNER("Film Scanner", R.drawable.ic_home),
-    LIBRARY("Film Library", R.drawable.ic_favorite),
-    SETTINGS("Settings", R.drawable.ic_account_box)
+enum class AppScreen(val title: String, val icon: ImageVector) {
+    MAIN_MENU("MoFilm", Icons.Default.Home),
+    SCANNER("Film Scanner", Icons.Default.PhotoCamera),
+    LIBRARY("Film Library", Icons.AutoMirrored.Filled.MenuBook),
+    SETTINGS("Settings", Icons.Default.Settings)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MoFilmApp(isOpenCVLoaded: Boolean = false) {
     var currentScreen by rememberSaveable { mutableStateOf(AppScreen.MAIN_MENU) }
-    // Hoistujemy ViewModel, aby był współdzielony między zakładkami
     val filmViewModel: FilmProcessViewModel = viewModel()
+
+    // Powrót do menu głównego przyciskiem systemowym
+    BackHandler(enabled = currentScreen != AppScreen.MAIN_MENU) {
+        currentScreen = AppScreen.MAIN_MENU
+    }
 
     Scaffold(
         topBar = {
@@ -81,7 +91,12 @@ fun MoFilmApp(isOpenCVLoaded: Boolean = false) {
         },
         bottomBar = {
             NavigationBar {
-                val items = listOf(AppScreen.SCANNER, AppScreen.MAIN_MENU, AppScreen.LIBRARY, AppScreen.SETTINGS)
+                val items = listOf(
+                    AppScreen.MAIN_MENU,
+                    AppScreen.SCANNER,
+                    AppScreen.LIBRARY,
+                    AppScreen.SETTINGS
+                )
                 items.forEach { screen ->
                     val isSelected = currentScreen == screen
                     NavigationBarItem(
@@ -90,7 +105,7 @@ fun MoFilmApp(isOpenCVLoaded: Boolean = false) {
                         label = { Text(screen.title) },
                         icon = {
                             Icon(
-                                painter = painterResource(id = screen.icon),
+                                imageVector = screen.icon,
                                 contentDescription = screen.title
                             )
                         }
@@ -105,16 +120,30 @@ fun MoFilmApp(isOpenCVLoaded: Boolean = false) {
                 .padding(innerPadding),
             color = MaterialTheme.colorScheme.background
         ) {
-            when (currentScreen) {
-                AppScreen.MAIN_MENU -> MainMenuScreen(
-                    isOpenCVLoaded = isOpenCVLoaded,
-                    onScannerClick = { currentScreen = AppScreen.SCANNER },
-                    onLibraryClick = { currentScreen = AppScreen.LIBRARY },
-                    onSettingsClick = { currentScreen = AppScreen.SETTINGS }
-                )
-                AppScreen.SCANNER -> ScannerScreen(viewModel = filmViewModel)
-                AppScreen.LIBRARY -> LibraryScreen(viewModel = filmViewModel)
-                AppScreen.SETTINGS -> SettingsScreen(viewModel = filmViewModel)
+            AnimatedContent(
+                targetState = currentScreen,
+                transitionSpec = {
+                    if (targetState.ordinal > initialState.ordinal) {
+                        (slideInHorizontally { width -> width } + fadeIn()).togetherWith(
+                            slideOutHorizontally { width -> -width } + fadeOut())
+                    } else {
+                        (slideInHorizontally { width -> -width } + fadeIn()).togetherWith(
+                            slideOutHorizontally { width -> width } + fadeOut())
+                    }.using(SizeTransform(clip = false))
+                },
+                label = "ScreenTransition"
+            ) { targetScreen ->
+                when (targetScreen) {
+                    AppScreen.MAIN_MENU -> MainMenuScreen(
+                        isOpenCVLoaded = isOpenCVLoaded,
+                        onScannerClick = { currentScreen = AppScreen.SCANNER },
+                        onLibraryClick = { currentScreen = AppScreen.LIBRARY },
+                        onSettingsClick = { currentScreen = AppScreen.SETTINGS }
+                    )
+                    AppScreen.SCANNER -> ScannerScreen(viewModel = filmViewModel)
+                    AppScreen.LIBRARY -> LibraryScreen(viewModel = filmViewModel)
+                    AppScreen.SETTINGS -> SettingsScreen(viewModel = filmViewModel)
+                }
             }
         }
     }
